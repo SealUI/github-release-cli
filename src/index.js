@@ -3,29 +3,34 @@
 import fs from 'fs';
 import path from 'path';
 import Octokit from '@octokit/rest';
+import chalk from 'chalk';
 import program from 'commander';
 import * as LinkHeader from 'http-link-header';
 import * as mime from 'mime-types';
 import minimatch from 'minimatch';
 import parse from 'url-parse';
+import ora from 'ora';
 import pkg from '../package.json';
 
 program
     .version(pkg.version)
     .usage('<command> [<args>]')
-    .option('-T, --token <token>', 'OAuth2 token')
-    .option('-o, --owner <owner>', 'owner')
-    .option('-r, --repo <repo>', 'repo')
-    .option('-t, --tag <tag>', 'tag')
-    .option('-n, --name <name>', 'name')
-    .option('-b, --body <body>', 'body', false)
-    .option('-d, --draft [value]', 'draft', function(val) {
+    .option('--baseurl <baseurl>', 'API endpoint', 'https://api.github.com')
+    .option('-T, --token <token>', 'OAuth2 token', null)
+    .option('-o, --owner <owner>', 'The repository owner.', '')
+    .option('-r, --repo <repo>', 'The repository name.', '')
+    .option('-t, --tag <tag>', 'The name of the tag.')
+    .option('--release-id <id>', 'The release id.')
+    .option('-c, --commitish <value>', 'Specifies the commitish value for tag. Unused if the tag already exists.')
+    .option('-n, --name <name>', 'The name of the release.', '') // Note: name is a reserved word and it has to specify a default value.
+    .option('-b, --body <body>', 'Text describing the contents of the tag.')
+    .option('-d, --draft [value]', '`true` makes the release a draft, and `false` publishes the release.', function(val) {
         if (String(val).toLowerCase() === 'false') {
             return false;
         }
         return true;
     })
-    .option('-p, --prerelease [value]', 'prerelease', function(val) {
+    .option('-p, --prerelease [value]', '`true` to identify the release as a prerelease, `false` to identify the release as a full release.', function(val) {
         if (String(val).toLowerCase() === 'false') {
             return false;
         }
@@ -36,22 +41,19 @@ program.parse(process.argv);
 
 const [command, ...args] = program.args;
 
+const token = (program.token || process.env.GITHUB_TOKEN);
 const octokit = new Octokit({
-    auth() {
-        const token = (program.token || process.env.GITHUB_TOKEN);
-        if (token) {
-            return `token ${token}`;
-        }
-    }
+    auth: token || null,
+    baseUrl: program.baseurl,
 });
     
-function next(response) {
+const getNextPage = (response) => {
     if (!response.headers || !response.headers.link) {
         return false;
     }
 
-    let link = LinkHeader.parse(response.headers.link).rel('next');
-    if (!link) {
+    const link = LinkHeader.parse(response.headers.link).rel('next');
+    if (!link || !link[0]) {
         return false;
     }
 
@@ -62,33 +64,64 @@ function next(response) {
 
     const nextPage = parseInt(url.query.page);
     return nextPage;
-}
+};
+
+const getReleaseByTag = async ({ owner, repo, tag }) => {
+    try {
+        const res = await octokit.repos.getReleaseByTag({ owner, repo, tag });
+        const release = res.data;
+        return release;
+    } catch (e) {
+        // Ignore
+    }
+
+    try {
+        let page = 1;
+        do {
+            const res = await octokit.repos.listReleases({ owner, repo, page });
+            const releases = res.data;
+            for (const release of releases) {
+                if (release.tag_name === tag) {
+                    return release;
+                }
+            }
+            page = getNextPage(res);
+        } while (page)
+    } catch (err) {
+        // Ignore
+    }
+
+    console.log('No release found.');
+    return null;
+};
 
 const fn = {
     'upload': async () => {
-        const { owner, repo, tag, name, body, draft, prerelease } = program;
+        const { owner, repo, tag, commitish, name, body, draft, prerelease, releaseId } = program;
         const files = args;
         let release;
 
         try {
-            console.log(`> getReleaseByTag: owner=${owner}, repo=${repo}, tag=${tag}`);
-            const res = await octokit.repos.getReleaseByTag({
-                owner: owner,
-                repo: repo,
-                tag: tag,
-            });
-            release = res.data;
+            if (tag) {
+                console.log(`> getReleaseByTag: owner=${owner}, repo=${repo}, tag=${tag}`);
+                release = await getReleaseByTag({ owner, repo, tag });
+            } else if (releaseId) {
+                console.log(`> getRelease: owner=${owner}, repo=${repo}, release_id=${releaseId}`);
+                const res = await octokit.repos.getRelease({ owner, repo, release_id: releaseId });
+                release = res.data;
+            }
         } catch (err) {
             // Ignore
         }
 
         try {
             if (!release) {
-                console.log(`> createRelease: tag_name=${tag}, name=${name || tag}, draft=${!!draft}, prerelease=${!!prerelease}`);
+                console.log(`> createRelease: tag_name=${tag}, target_commitish=${commitish || ''}, name=${name || tag}, draft=${!!draft}, prerelease=${!!prerelease}`);
                 const res = await octokit.repos.createRelease({
                     owner,
                     repo,
                     tag_name: tag,
+                    target_commitish: commitish,
                     name: name || tag,
                     body: body || '',
                     draft: !!draft,
@@ -131,18 +164,30 @@ const fn = {
         }
     },
     'delete': async () => {
-        const { owner, repo, tag, name, body, draft, prerelease } = program;
+        const { owner, repo, tag, releaseId } = program;
         const patterns = args;
         let release;
 
         try {
-            console.log(`> getReleaseByTag: owner=${owner}, repo=${repo}, tag=${tag}`);
-            const res = await octokit.repos.getReleaseByTag({
-                owner: owner,
-                repo: repo,
-                tag: tag,
-            });
-            release = res.data;
+            if (tag) {
+                console.log(`> getReleaseByTag: owner=${owner}, repo=${repo}, tag=${tag}`);
+                release = await getReleaseByTag({ owner, repo, tag });
+            } else if (releaseId) {
+                console.log(`> getRelease: owner=${owner}, repo=${repo}, release_id=${releaseId}`);
+                const res = await octokit.repos.getRelease({ owner, repo, release_id: releaseId });
+                release = res.data;
+            }
+
+            if (!release) {
+                return;
+            }
+
+            if (patterns.length === 0) {
+                const release_id = release.id;
+                console.log(`> deleteRelease: release_id=${release_id}`);
+                await octokit.repos.deleteRelease({ owner, repo, release_id: release.id });
+                return;
+            }
         } catch (err) {
             console.error(err);
             return;
@@ -157,7 +202,7 @@ const fn = {
             do {
                 const res = await octokit.repos.listAssetsForRelease({ owner, repo, release_id, page });
                 assets = assets.concat(res.data);
-                page = next(res);
+                page = getNextPage(res);
             } while (page)
 
             const deleteAssets = assets.filter(asset => {
@@ -187,13 +232,36 @@ const fn = {
         }
     },
     'list': async () => {
-        const releases = await octokit.repos.listReleases({
-            owner: program.owner,
-            repo: program.repo,
-            page: 1,
-        });
-        for (const release of releases.data) {
-            console.log(`${release.name} (${release.tag_name})`);
+        const { owner, repo } = program;
+        let releases = [];
+
+        const spinner = ora({
+            spinner: 'point',
+            text: 'Fetching...',
+        }).start();
+
+        try {
+            let page = 1;
+            do {
+                const res = await octokit.repos.listReleases({ owner, repo, page });
+                releases = releases.concat(res.data);
+                page = getNextPage(res);
+            } while (page)
+        } catch (err) {
+            console.error(err);
+        }
+
+        spinner.stop();
+
+        for (const release of releases) {
+            let prefix = 'RELEASE';
+            if (release.draft) {
+                prefix = 'DRAFT';
+            }
+            if (release.prerelease) {
+                prefix = 'PRERELEASE';
+            }
+            console.log(`${chalk.blue('●')} [${prefix}] id=${chalk.cyan(release.id)}, tag_name=${chalk.yellow(JSON.stringify(release.tag_name))}, name=${chalk.yellow(JSON.stringify(release.name))}, created_at=${chalk.yellow(release.created_at)}, published_at=${chalk.yellow(release.published_at)}`);
         }
     },
 }[command];

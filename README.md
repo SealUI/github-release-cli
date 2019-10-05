@@ -18,17 +18,29 @@ Run `github-release` with `-h` or `--help` options:
 Usage: github-release <command> [<args>]
 
 Options:
+  -V, --version             output the version number
+  --baseurl <baseurl>       API endpoint (default: "https://api.github.com")
+  -T, --token <token>       OAuth2 token (default: null)
+  -o, --owner <owner>       The repository owner. (default: "")
+  -r, --repo <repo>         The repository name. (default: "")
+  -t, --tag <tag>           The name of the tag.
+  --release-id <id>         The release id.
+  -c, --commitish <value>   Specifies the commitish value for tag. Unused if the tag already exists.
+  -n, --name <name>         The name of the release. (default: "")
+  -b, --body <body>         Text describing the contents of the tag.
+  -d, --draft [value]       `true` makes the release a draft, and `false` publishes the release.
+  -p, --prerelease [value]  `true` to identify the release as a prerelease, `false` to identify the release as a full release.
+  -h, --help                output usage information
+```
 
-  -h, --help           output usage information
-  -V, --version        output the version number
-  -T, --token <token>  OAuth2 token
-  -o, --owner <owner>  owner
-  -r, --repo <repo>    repo
-  -t, --tag <tag>      tag
-  -n, --name <name>    name
-  -b, --body <body>    body
-  -d, --draft          draft
-  -p, --prerelease     prerelease
+## Commands
+
+### List
+
+```sh
+github-release list
+  --owner cheton \
+  --repo github-release-cli
 ```
 
 ### Upload
@@ -41,6 +53,18 @@ github-release upload \
   --name "v0.1.0" \
   --body "This release contains bug fixes and imporvements, including:\n..." \
   archive.zip index.html app.min.css app.min.js
+```
+
+#### Specify the commitish value for tag
+
+```sh
+github-release upload \
+    --owner cheton \
+    --repo github-release-cli \
+    --commitish 6a8e375 \
+    --tag "v0.1.0" \
+    --name "v0.1.0" \
+    --body "The commitish value for tag"
 ```
 
 #### Create a prerelease
@@ -69,14 +93,33 @@ github-release upload \
 
 ### Delete
 
+#### Delete release assets
+
 You can use glob expressions to match files:
 ```sh
 github-release delete \
   --owner cheton \
   --repo github-release-cli \
   --tag "v0.1.0" \
-  --name "v0.1.0" \
   archive.zip index.html "app.*"
+```
+
+#### Delete a release by specifying the tag name
+
+```sh
+github-release delete \
+  --owner cheton \
+  --repo github-release-cli \
+  --tag "v0.1.0"
+```
+
+#### Delete a release by specifying the release id
+
+```sh
+github-release delete \
+  --owner cheton \
+  --repo github-release-cli \
+  --release-id 17994985
 ```
 
 ## Examples
